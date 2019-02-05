@@ -6,7 +6,13 @@ set -euo pipefail
 # generic JVM settings you may want to add
 JVM_OPTS=${JVM_OPTS:-""}
 CLASSPATH=${CLASSPATH:-""}
-ZK_SERVERS=${ZK_SERVERS:-"localhost:2888:3888"}
+
+# export JVM_HEAP_OPTS="-Xms512M -Xmx512M"
+# export JMX_PORT=5555
+# export JVM_GC_LOG=/var/log/gc.log
+
+# write myid only if it doesn't exist
+[ -f "$ZOODATADIR/myid" ] || echo "${ZK_SERVER_ID:-1}" > "$ZOODATADIR/myid"
 
 # generate the config only if it doesn't exist
 if [ ! -f "$ZOOCFGDIR/$ZOOCFG" ]; then
@@ -31,24 +37,39 @@ standaloneEnabled=$ZK_STANDALONE_ENABLED
 		EOT
 
     idx=1
-    for s in $(echo $ZK_SERVERS | tr ';' '\n'); do
+    for s in $(echo ${ZK_SERVERS:-"localhost:2888:3888"} | tr ';' '\n'); do
         echo server.$((idx++))=$s >> "$ZOOCFGDIR/$ZOOCFG"
     done
 fi
 
-# write myid only if it doesn't exist
-[ -f "$ZOODATADIR/myid" ] || echo "${ZK_SERVER_ID:-1}" > "$ZOODATADIR/myid"
+# generate log4j configuration
+export LOG4J_CONF="$ZOOCFGDIR/log4j.properties"
+cat <<-EOT >$LOG4J_CONF
+log4j.rootLogger=${ZK_LOG_LEVEL:-"INFO"}, stdout
+
+log4j.appender.stdout=org.apache.log4j.ConsoleAppender
+log4j.appender.stdout.layout=org.apache.log4j.PatternLayout
+# log4j.appender.stdout.layout.ConversionPattern=%d{ISO8601} [myid:%X{myid}] %-5p [%C{1}] - %m%n
+log4j.appender.stdout.layout.ConversionPattern=%d{ISO8601} [myid:%X{myid}] %-5p [%C{2}] %m%n
+# log4j.appender.stdout.layout.ConversionPattern=%d{ISO8601} [myid:%X{myid}] - %-5p [%t:%C{1}@%L] - %m%n
+
+EOT
+
+# add specific loggers as defined by LOG4J_LOGGERS env variable
+# e.g. LOG4J_LOGGERS="kafka.controller=WARN,kafka.foo.bar=DEBUG"
+# will be transformed to:
+# log4j.logger.kafka.controller=WARN, stdout
+# log4j.logger.kafka.foo.bar=DEBUG, stdout
+for s in $(echo $LOG4J_LOGGERS | tr ',' '\n'); do
+    [ -z "${s##*=*}" ] && echo "log4j.logger.$s, stdout" >> $LOG4J_CONF
+done
+
 
 LIBPATH=($ZOOLIBDIR/*.jar)
 for i in "${LIBPATH[@]}"; do
     CLASSPATH="$i:$CLASSPATH"
 done
-
 export CLASSPATH
-export JVM_HEAP_OPTS="-Xms512M -Xmx512M"
-# export JMX_PORT=5555
-# export JVM_GC_LOG=/var/log/gc.log
-export LOG4J_CONF="$ZOOCFGDIR/log4j.properties"
 
 echo "===[ Environment   ]==========================================================="
 env
