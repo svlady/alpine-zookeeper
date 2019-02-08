@@ -4,6 +4,7 @@
 set -euo pipefail
 
 # setting defaults for configuration variables
+ZK_SERVERS=${ZK_SERVERS:-""}
 ZK_USER=${ZK_USER:-"zookeeper"}
 ZK_LOG_LEVEL=${ZK_LOG_LEVEL:-"INFO"}
 ZK_CONF_DIR=${ZK_CONF_DIR:-"$ZK_HOME/conf"}
@@ -24,11 +25,7 @@ ZK_MAX_SESSION_TIMEOUT=${ZK_MAX_SESSION_TIMEOUT:- $((ZK_TICK_TIME*20))}
 ZK_SNAP_RETAIN_COUNT=${ZK_SNAP_RETAIN_COUNT:-3}
 ZK_PURGE_INTERVAL=${ZK_PURGE_INTERVAL:-0}
 ZK_CMD_WHITELIST=${ZK_CMD_WHITELIST:-"*"}
-ZK_SERVERS=${ZK_SERVERS:-""}
-
-# additional JVM settings
-# export JMX_PORT=5555
-# export JVM_GC_LOG=/var/log/gc.log
+ZK_JVM_FLAGS=${ZK_JVM_FLAGS:-"-server -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:+ExplicitGCInvokesConcurrent -Djava.awt.headless=true -Djava.net.preferIPv4Stack=true"}
 
 # Zookeeper instance hostname must include ordinal number, e.g. zk-0, zk-1...
 if [[ $HOSTNAME =~ (.*)-([0-9]+)$ ]]; then
@@ -88,9 +85,9 @@ for s in $(echo ${ZK_LOG4J_LOGGERS:-""} | tr ',' '\n'); do
   [ -z "${s##*=*}" ] && echo "log4j.logger.$s" >> $ZK_LOG4J_CONF
 done
 
-# JVM performance options
-SERVER_JVMFLAGS="-server -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:+ExplicitGCInvokesConcurrent -Djava.awt.headless=true"
-SERVER_JVMFLAGS="$SERVER_JVMFLAGS -Djava.net.preferIPv4Stack=true -Xmx${ZK_HEAP_SIZE} -Xms${ZK_HEAP_SIZE} -Dlog4j.configuration=file:${ZK_LOG4J_CONF}"
+# JVM options
+JVM_FLAGS="$ZK_JVM_FLAGS -Xmx${ZK_HEAP_SIZE} -Xms${ZK_HEAP_SIZE} -Dlog4j.configuration=file:${ZK_LOG4J_CONF}"
+
 # JMX settings
 # JMX_OPTS=${JMX_OPTS:-"-Dcom.sun.management.jmxremote=true -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false"}
 #
@@ -99,17 +96,15 @@ SERVER_JVMFLAGS="$SERVER_JVMFLAGS -Djava.net.preferIPv4Stack=true -Xmx${ZK_HEAP_
 # fi
 
 # add debug options if enabled
-if [ ${JVM_DEBUG:-""} ]; then
-  JVM_DEBUG_PORT=${JVM_DEBUG_PORT:-"5005"}
-
+if [ ${ZK_JVM_DEBUG:-""} ]; then
+  ZK_JVM_DEBUG_PORT=${ZK_JVM_DEBUG_PORT:-"5005"}
   # Use the defaults if JAVA_DEBUG_OPTS was not set
-  JVM_DEBUG_OPTS=${JVM_DEBUG_OPTS:-"-agentlib:jdwp=transport=dt_socket,server=y,suspend=${JVM_DEBUG_SUSPEND_FLAG:-n},address=$JVM_DEBUG_PORT"}
-
-  SERVER_JVMFLAGS="$SERVER_JVMFLAGS $JVM_DEBUG_OPTS"
+  JVM_DEBUG_OPTS="-agentlib:jdwp=transport=dt_socket,server=y,suspend=${ZK_JVM_DEBUG_SUSPEND_FLAG:-n},address=${ZK_JVM_DEBUG_PORT}"
+  JVM_FLAGS="$JVM_FLAGS $JVM_DEBUG_OPTS"
 fi
 
 # add GC options if enabled
-if [ ${JVM_GC_LOG:-} ]; then
+if [ ${ZK_JVM_GC_LOG:-} ]; then
   # The first segment of the version number, which is '1' for releases before Java 9
   # it then becomes '9', '10', ... Some examples of the first line of `java --version`:
   #   8 -> java version "1.8.0_152"
@@ -120,15 +115,16 @@ if [ ${JVM_GC_LOG:-} ]; then
   if [[ "$JAVA_MAJOR_VERSION" -ge "9" ]] ; then
     JVM_GC_LOG_OPTS="-Xlog:gc*:file=$JVM_GC_LOG:time,tags:filecount=10,filesize=102400"
   else
-    JVM_GC_LOG_OPTS="-Xloggc:$JVM_GC_LOG -verbose:gc -XX:+PrintGCDetails -XX:+PrintGCDateStamps -XX:+PrintGCTimeStamps -XX:+UseGCLogFileRotation -XX:NumberOfGCLogFiles=10 -XX:GCLogFileSize=100M"
+    JVM_GC_LOG_OPTS="-Xloggc:${ZK_JVM_GC_LOG} -verbose:gc -XX:+PrintGCDetails -XX:+PrintGCDateStamps -XX:+PrintGCTimeStamps -XX:+UseGCLogFileRotation -XX:NumberOfGCLogFiles=10 -XX:GCLogFileSize=100M"
   fi
 
-  SERVER_JVMFLAGS="$SERVER_JVMFLAGS $JVM_GC_LOG_OPTS"
+  JVM_FLAGS="$JVM_FLAGS $JVM_GC_LOG_OPTS"
 fi
+
 
 cat <<EOT >$ZK_CONF_DIR/java.env
 JMXPORT=${ZK_JMX_PORT:-""}
-SERVER_JVMFLAGS="$SERVER_JVMFLAGS"
+SERVER_JVMFLAGS="$JVM_FLAGS"
 CLIENT_JVMFLAGS="-Dzookeeper.root.logger=WARN,CONSOLE"
 EOT
 
